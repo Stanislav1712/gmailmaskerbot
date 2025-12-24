@@ -1,12 +1,6 @@
 import logging
-import uuid
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InlineQueryResultArticle,
-    InputTextMessageContent,
-)
+import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Updater,
     CommandHandler,
@@ -14,71 +8,46 @@ from telegram.ext import (
     CallbackQueryHandler,
     MessageHandler,
     Filters,
-    InlineQueryHandler,
 )
 
-# ================== НАСТРОЙКИ ==================
-TOKEN = "8525810024:AAG7WQ6OZszZ9gyXc2bg_QuxJefNGQBWciU"
-ADMIN_ID = 123456789        # ← ВСТАВЬ СВОЙ TELEGRAM ID
-FREE_LIMIT = 10
-
-# ================== ЛОГИ ==================
+# ---------------- ЛОГИ ----------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+logger = logging.getLogger(__name__)
 
-# ================== ХРАНИЛИЩА ==================
+# ---------------- СОСТОЯНИЕ ----------------
 user_choices = {}
 user_count = {}
-last_username = {}
-last_aliases = {}
-user_usage = {}
-paid_users = set()
 
-# ================== /start ==================
+# ---------------- /start ----------------
 def start(update: Update, context: CallbackContext):
-    uid = update.effective_user.id
-    user_choices[uid] = {"dot": False, "plus": False}
-    user_count[uid] = 1
-    user_usage.setdefault(uid, 0)
+    user_id = update.message.from_user.id
+    user_choices[user_id] = {"dot": False, "plus": False}
+    user_count[user_id] = 1
 
     update.message.reply_text(
-        "👋 GmailMaskerBot\n\n"
-        "✔ Генерация Gmail псевдонимов\n"
-        "✔ Inline режим\n"
-        "✔ Premium\n\n"
-        "Выбери настройки:",
-        reply_markup=options_keyboard(uid),
+        "Привет 👋\nВыбери способы генерации Gmail-псевдонимов:",
+        reply_markup=options_keyboard(user_id),
     )
 
-# ================== КЛАВИАТУРЫ ==================
-def options_keyboard(uid):
-    return InlineKeyboardMarkup([
+# ---------------- КЛАВИАТУРЫ ----------------
+def options_keyboard(user_id):
+    dot = user_choices[user_id]["dot"]
+    plus = user_choices[user_id]["plus"]
+
+    keyboard = [
         [
-            InlineKeyboardButton(
-                f"{'✅' if user_choices[uid]['dot'] else '⬜'} Точка",
-                callback_data="dot"
-            ),
-            InlineKeyboardButton(
-                f"{'✅' if user_choices[uid]['plus'] else '⬜'} Плюс",
-                callback_data="plus"
-            ),
+            InlineKeyboardButton(f"{'✅' if dot else '⬜'} Точка", callback_data="dot"),
+            InlineKeyboardButton(f"{'✅' if plus else '⬜'} Плюс", callback_data="plus"),
         ],
         [
-            InlineKeyboardButton(
-                f"📦 Количество: {user_count[uid]}",
-                callback_data="count"
-            )
+            InlineKeyboardButton("📦 Количество адресов", callback_data="count")
         ],
-        [
-            InlineKeyboardButton("🔁 Ещё", callback_data="regen"),
-            InlineKeyboardButton("📋 Копировать", callback_data="copy"),
-        ],
-        [
-            InlineKeyboardButton("💎 Premium", callback_data="premium")
-        ]
-    ])
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 
 def count_keyboard():
     return InlineKeyboardMarkup([
@@ -87,166 +56,99 @@ def count_keyboard():
             InlineKeyboardButton("5", callback_data="count_5"),
             InlineKeyboardButton("10", callback_data="count_10"),
         ],
-        [InlineKeyboardButton("⬅ Назад", callback_data="back")]
+        [
+            InlineKeyboardButton("⬅ Назад", callback_data="back")
+        ],
     ])
 
-# ================== КНОПКИ ==================
+# ---------------- КНОПКИ ----------------
 def button(update: Update, context: CallbackContext):
-    q = update.callback_query
-    q.answer()
-    uid = q.from_user.id
-    d = q.data
+    query = update.callback_query
+    query.answer()
 
-    if d in ("dot", "plus"):
-        user_choices[uid][d] = not user_choices[uid][d]
-        q.edit_message_reply_markup(reply_markup=options_keyboard(uid))
+    user_id = query.from_user.id
+    data = query.data
 
-    elif d == "count":
-        q.edit_message_text("Выбери количество:", reply_markup=count_keyboard())
+    if data == "dot":
+        user_choices[user_id]["dot"] = not user_choices[user_id]["dot"]
+        query.edit_message_reply_markup(reply_markup=options_keyboard(user_id))
 
-    elif d.startswith("count_"):
-        user_count[uid] = int(d.split("_")[1])
-        q.edit_message_text("Настройки обновлены", reply_markup=options_keyboard(uid))
+    elif data == "plus":
+        user_choices[user_id]["plus"] = not user_choices[user_id]["plus"]
+        query.edit_message_reply_markup(reply_markup=options_keyboard(user_id))
 
-    elif d == "regen":
-        if uid not in last_username:
-            q.edit_message_text("❌ Сначала отправь Gmail")
-            return
-        send_aliases(q, uid)
+    elif data == "count":
+        query.edit_message_text("Выбери количество адресов:", reply_markup=count_keyboard())
 
-    elif d == "copy":
-        if uid in last_aliases:
-            context.bot.send_message(uid, "📋\n" + "\n".join(last_aliases[uid]))
-
-    elif d == "premium":
-        q.edit_message_text(
-            "💎 Premium\n\n"
-            "✔ Без лимитов\n"
-            "✔ Полный inline\n\n"
-            "Свяжитесь с админом"
+    elif data.startswith("count_"):
+        user_count[user_id] = int(data.split("_")[1])
+        query.edit_message_text(
+            f"Количество: {user_count[user_id]}\n\n"
+            "Теперь отправь Gmail-адрес (example@gmail.com)"
         )
 
-# ================== ЛИМИТ ==================
-def check_limit(uid):
-    return uid in paid_users or user_usage.get(uid, 0) < FREE_LIMIT
+    elif data == "back":
+        query.edit_message_text(
+            "Выбери способы генерации Gmail-псевдонимов:",
+            reply_markup=options_keyboard(user_id),
+        )
 
-# ================== ГЕНЕРАЦИЯ ==================
-def generate_aliases(username, uid):
+# ---------------- ГЕНЕРАЦИЯ ----------------
+def generate_aliases(username, user_id):
     aliases = []
-    limit = user_count[uid]
+    limit = user_count.get(user_id, 1)
 
-    if user_choices[uid]["dot"]:
+    if user_choices[user_id]["dot"]:
         for i in range(1, len(username)):
             aliases.append(f"{username[:i]}.{username[i:]}@gmail.com")
             if len(aliases) >= limit:
                 return aliases
 
-    if user_choices[uid]["plus"]:
-        for tag in ["news", "shop", "work", "promo"]:
+    if user_choices[user_id]["plus"]:
+        tags = ["news", "shop", "work", "promo", "social"]
+        for tag in tags:
             aliases.append(f"{username}+{tag}@gmail.com")
             if len(aliases) >= limit:
                 return aliases
 
     return aliases[:limit]
 
-# ================== EMAIL ==================
+# ---------------- EMAIL ----------------
 def handle_email(update: Update, context: CallbackContext):
-    uid = update.effective_user.id
-    text = update.message.text.lower().strip()
+    text = update.message.text.strip().lower()
 
-    if not check_limit(uid):
-        update.message.reply_text("❌ Лимит исчерпан. Premium 💎")
+    if "@" not in text:
+        update.message.reply_text("❌ Введите корректный Gmail")
         return
 
-    if not text.endswith("@gmail.com"):
+    username, domain = text.split("@", 1)
+
+    if domain != "gmail.com":
         update.message.reply_text("❌ Только @gmail.com")
         return
 
-    last_username[uid] = text.split("@")[0]
-    send_aliases(update.message, uid)
+    user_id = update.message.from_user.id
+    aliases = generate_aliases(username, user_id)
 
-def send_aliases(target, uid):
-    aliases = generate_aliases(last_username[uid], uid)
-    last_aliases[uid] = aliases
-    user_usage[uid] += 1
-
-    target.reply_text(
-        "✅ Результат:\n\n" + "\n".join(aliases),
-        reply_markup=options_keyboard(uid),
-    )
-
-# ================== INLINE ==================
-def inline_query(update: Update, context: CallbackContext):
-    q = update.inline_query.query.lower().strip()
-    results = []
-
-    if q.endswith("@gmail.com"):
-        username = q.split("@")[0]
-        aliases = [f"{username}+inline@gmail.com"]
-
-        results.append(
-            InlineQueryResultArticle(
-                id=str(uuid.uuid4()),
-                title="Gmail alias",
-                input_message_content=InputTextMessageContent("\n".join(aliases)),
-            )
-        )
-
-    update.inline_query.answer(results, cache_time=1)
-
-# ================== 👑 АДМИН-ПАНЕЛЬ ==================
-def admin(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        update.message.reply_text("⛔ Доступ запрещён")
+    if not aliases:
+        update.message.reply_text("❌ Выберите хотя бы одну опцию")
         return
 
-    update.message.reply_text(
-        "👑 Админ-панель\n\n"
-        f"👥 Пользователей: {len(user_usage)}\n"
-        f"💎 Premium: {len(paid_users)}\n\n"
-        "Команды:\n"
-        "/addpremium ID\n"
-        "/delpremium ID\n"
-        "/stats"
-    )
+    update.message.reply_text("✅ Сгенерировано:\n\n" + "\n".join(aliases))
 
-def add_premium(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    uid = int(context.args[0])
-    paid_users.add(uid)
-    update.message.reply_text(f"✅ Premium выдан {uid}")
-
-def del_premium(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    uid = int(context.args[0])
-    paid_users.discard(uid)
-    update.message.reply_text(f"❌ Premium удалён {uid}")
-
-def stats(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    update.message.reply_text(
-        f"📊 Статистика\n\n"
-        f"Пользователей: {len(user_usage)}\n"
-        f"Premium: {len(paid_users)}"
-    )
-
-# ================== MAIN ==================
+# ---------------- MAIN ----------------
 def main():
+    TOKEN = os.getenv("BOT_TOKEN")
+
+    if not TOKEN:
+        raise RuntimeError("❌ BOT_TOKEN не задан")
+
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("admin", admin))
-    dp.add_handler(CommandHandler("addpremium", add_premium))
-    dp.add_handler(CommandHandler("delpremium", del_premium))
-    dp.add_handler(CommandHandler("stats", stats))
-
     dp.add_handler(CallbackQueryHandler(button))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_email))
-    dp.add_handler(InlineQueryHandler(inline_query))
 
     updater.start_polling()
     updater.idle()
