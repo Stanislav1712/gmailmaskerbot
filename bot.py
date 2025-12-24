@@ -1,6 +1,10 @@
 import logging
-import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+)
 from telegram.ext import (
     Updater,
     CommandHandler,
@@ -17,40 +21,45 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------- СОСТОЯНИЕ ----------------
-user_choices = {}
-user_count = {}
+# ---------------- СОСТОЯНИЕ ПОЛЬЗОВАТЕЛЯ ----------------
+user_choices = {}   # {user_id: {"dot": bool, "plus": bool}}
+user_count = {}     # {user_id: int}
 
-# ---------------- /start ----------------
-def start(update: Update, context: CallbackContext):
-    user_id = update.message.from_user.id
-    user_choices[user_id] = {"dot": False, "plus": False}
-    user_count[user_id] = 1
-
-    update.message.reply_text(
-        "Привет 👋\nВыбери способы генерации Gmail-псевдонимов:",
-        reply_markup=options_keyboard(user_id),
+# ---------------- REPLY КНОПКА СТАРТ ----------------
+def start_keyboard():
+    keyboard = [["🚀 Старт"]]
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False
     )
 
-# ---------------- КЛАВИАТУРЫ ----------------
+# ---------------- INLINE КЛАВИАТУРЫ ----------------
 def options_keyboard(user_id):
     dot = user_choices[user_id]["dot"]
     plus = user_choices[user_id]["plus"]
 
     keyboard = [
         [
-            InlineKeyboardButton(f"{'✅' if dot else '⬜'} Точка", callback_data="dot"),
-            InlineKeyboardButton(f"{'✅' if plus else '⬜'} Плюс", callback_data="plus"),
+            InlineKeyboardButton(
+                f"{'✅' if dot else '⬜'} Точка", callback_data="dot"
+            ),
+            InlineKeyboardButton(
+                f"{'✅' if plus else '⬜'} Плюс", callback_data="plus"
+            ),
         ],
         [
-            InlineKeyboardButton("📦 Количество адресов", callback_data="count")
+            InlineKeyboardButton(
+                f"📦 Количество: {user_count[user_id]}",
+                callback_data="count"
+            )
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
 def count_keyboard():
-    return InlineKeyboardMarkup([
+    keyboard = [
         [
             InlineKeyboardButton("1", callback_data="count_1"),
             InlineKeyboardButton("5", callback_data="count_5"),
@@ -59,9 +68,34 @@ def count_keyboard():
         [
             InlineKeyboardButton("⬅ Назад", callback_data="back")
         ],
-    ])
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
-# ---------------- КНОПКИ ----------------
+# ---------------- /start ----------------
+def start(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+
+    user_choices[user_id] = {"dot": False, "plus": False}
+    user_count[user_id] = 1
+
+    update.message.reply_text(
+        "Привет 👋\nНажми «🚀 Старт», чтобы начать",
+        reply_markup=start_keyboard()
+    )
+
+# ---------------- НАЖАТИЕ 🚀 СТАРТ ----------------
+def start_button(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+
+    user_choices[user_id] = {"dot": False, "plus": False}
+    user_count[user_id] = 1
+
+    update.message.reply_text(
+        "Выбери способы генерации Gmail-псевдонимов:",
+        reply_markup=options_keyboard(user_id)
+    )
+
+# ---------------- ОБРАБОТКА INLINE КНОПОК ----------------
 def button(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
@@ -71,29 +105,36 @@ def button(update: Update, context: CallbackContext):
 
     if data == "dot":
         user_choices[user_id]["dot"] = not user_choices[user_id]["dot"]
-        query.edit_message_reply_markup(reply_markup=options_keyboard(user_id))
+        query.edit_message_reply_markup(
+            reply_markup=options_keyboard(user_id)
+        )
 
     elif data == "plus":
         user_choices[user_id]["plus"] = not user_choices[user_id]["plus"]
-        query.edit_message_reply_markup(reply_markup=options_keyboard(user_id))
+        query.edit_message_reply_markup(
+            reply_markup=options_keyboard(user_id)
+        )
 
     elif data == "count":
-        query.edit_message_text("Выбери количество адресов:", reply_markup=count_keyboard())
+        query.edit_message_text(
+            "Выбери количество адресов:",
+            reply_markup=count_keyboard()
+        )
 
     elif data.startswith("count_"):
         user_count[user_id] = int(data.split("_")[1])
         query.edit_message_text(
-            f"Количество: {user_count[user_id]}\n\n"
-            "Теперь отправь Gmail-адрес (example@gmail.com)"
+            "Выбери способы генерации Gmail-псевдонимов:",
+            reply_markup=options_keyboard(user_id)
         )
 
     elif data == "back":
         query.edit_message_text(
             "Выбери способы генерации Gmail-псевдонимов:",
-            reply_markup=options_keyboard(user_id),
+            reply_markup=options_keyboard(user_id)
         )
 
-# ---------------- ГЕНЕРАЦИЯ ----------------
+# ---------------- ГЕНЕРАЦИЯ АЛИАСОВ ----------------
 def generate_aliases(username, user_id):
     aliases = []
     limit = user_count.get(user_id, 1)
@@ -105,7 +146,7 @@ def generate_aliases(username, user_id):
                 return aliases
 
     if user_choices[user_id]["plus"]:
-        tags = ["news", "shop", "work", "promo", "social"]
+        tags = ["news", "shop", "work", "social", "promo"]
         for tag in tags:
             aliases.append(f"{username}+{tag}@gmail.com")
             if len(aliases) >= limit:
@@ -113,7 +154,7 @@ def generate_aliases(username, user_id):
 
     return aliases[:limit]
 
-# ---------------- EMAIL ----------------
+# ---------------- ОБРАБОТКА EMAIL ----------------
 def handle_email(update: Update, context: CallbackContext):
     text = update.message.text.strip().lower()
 
@@ -131,27 +172,28 @@ def handle_email(update: Update, context: CallbackContext):
     aliases = generate_aliases(username, user_id)
 
     if not aliases:
-        update.message.reply_text("❌ Выберите хотя бы одну опцию")
+        update.message.reply_text("❌ Выберите опции")
         return
 
-    update.message.reply_text("✅ Сгенерировано:\n\n" + "\n".join(aliases))
+    update.message.reply_text(
+        "✅ Сгенерированные адреса:\n\n" + "\n".join(aliases)
+    )
 
 # ---------------- MAIN ----------------
 def main():
-    TOKEN = os.getenv("BOT_TOKEN")
-
-    if not TOKEN:
-        raise RuntimeError("❌ BOT_TOKEN не задан")
+    TOKEN = "8525810024:AAG7WQ6OZszZ9gyXc2bg_QuxJefNGQBWciU"
 
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.regex("^🚀 Старт$"), start_button))
     dp.add_handler(CallbackQueryHandler(button))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_email))
 
     updater.start_polling()
     updater.idle()
 
+# ---------------- START ----------------
 if __name__ == "__main__":
     main()
